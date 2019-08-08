@@ -1,132 +1,120 @@
 package de.robotricker.transportpipes.container;
 
-import java.util.List;
-
 import org.bukkit.Chunk;
 import org.bukkit.block.Block;
 import org.bukkit.block.Furnace;
 import org.bukkit.inventory.FurnaceInventory;
 import org.bukkit.inventory.ItemStack;
 
-import de.robotricker.transportpipes.duct.pipe.utils.FilteringMode;
-import de.robotricker.transportpipes.pipeitems.ItemData;
-import de.robotricker.transportpipes.protocol.ReflectionManager;
-import de.robotricker.transportpipes.utils.WrappedDirection;
-import de.robotricker.transportpipes.utils.staticutils.InventoryUtils;
-import io.sentry.Sentry;
+import de.robotricker.transportpipes.duct.pipe.filter.ItemFilter;
+import de.robotricker.transportpipes.location.TPDirection;
+import de.robotricker.transportpipes.utils.NMSUtils;
 
 public class FurnaceContainer extends BlockContainer {
 
-	private Chunk cachedChunk;
-	private Furnace cachedFurnace;
-	private FurnaceInventory cachedInv;
+    private Chunk chunk;
+    private Furnace cachedFurnace;
+    private FurnaceInventory cachedInv;
 
-	public FurnaceContainer(Block block) {
-		super(block);
-		this.cachedChunk = block.getChunk();
-		this.cachedFurnace = (Furnace) block.getState();
-		this.cachedInv = cachedFurnace.getInventory();
-	}
+    public FurnaceContainer(Block block) {
+        super(block);
+        this.chunk = block.getChunk();
+        this.cachedFurnace = (Furnace) block.getState();
+        this.cachedInv = cachedFurnace.getInventory();
+    }
 
-	@Override
-	public ItemStack extractItem(WrappedDirection extractDirection, int extractAmount, List<ItemData> filterItems, FilteringMode filteringMode) {
-		try {
-			if (!cachedChunk.isLoaded()) {
-				return null;
-			}
-			if (isInvLocked(cachedFurnace)) {
-				return null;
-			}
-			if (cachedInv.getResult() != null && new ItemData(cachedInv.getResult()).applyFilter(filterItems, filteringMode) > 0) {
-				ItemStack taken = InventoryUtils.createOneAmountItemStack(cachedInv.getResult());
-				cachedInv.setResult(InventoryUtils.changeAmount(cachedInv.getResult(), -extractAmount));
-				ItemStack clonedTaken = taken.clone();
-				clonedTaken.setAmount(Math.min(taken.getAmount(), extractAmount));
-				return clonedTaken;
-			}
-		} catch (Exception exception) {
-			exception.printStackTrace();
-			Sentry.capture(exception);
-		}
-		return null;
-	}
+    @Override
+    public boolean isInLoadedChunk() {
+        return chunk.isLoaded();
+    }
 
-	@Override
-	public ItemStack insertItem(WrappedDirection insertDirection, ItemStack insertion) {
-		try {
-			if (!cachedChunk.isLoaded()) {
-				return insertion;
-			}
-			if (isInvLocked(cachedFurnace)) {
-				return insertion;
-			}
-			if (ReflectionManager.isFurnaceBurnableItem(insertion)) {
-				if (insertDirection.isSide() || insertDirection == WrappedDirection.UP) {
-					ItemStack oldSmelting = cachedInv.getSmelting();
-					cachedInv.setSmelting(putItemInSlot(insertion, oldSmelting));
-					if (insertion == null || insertion.getAmount() == 0) {
-						insertion = null;
-					}
-				} else if (ReflectionManager.isFurnaceFuelItem(insertion)) {
-					ItemStack oldFuel = cachedInv.getFuel();
-					cachedInv.setFuel(putItemInSlot(insertion, oldFuel));
-					if (insertion == null || insertion.getAmount() == 0) {
-						insertion = null;
-					}
-				}
-			} else if (ReflectionManager.isFurnaceFuelItem(insertion)) {
-				ItemStack oldFuel = cachedInv.getFuel();
-				cachedInv.setFuel(putItemInSlot(insertion, oldFuel));
-				if (insertion == null || insertion.getAmount() == 0) {
-					insertion = null;
-				}
-			}
-		} catch (Exception exception) {
-			exception.printStackTrace();
-			Sentry.capture(exception);
-		}
-		return insertion;
-	}
+    @Override
+    public ItemStack extractItem(TPDirection extractDirection, int amount, ItemFilter itemFilter) {
+        if (!isInLoadedChunk()) {
+            return null;
+        }
+        if (isInvLocked(cachedFurnace)) {
+            return null;
+        }
+        if (itemFilter.applyFilter(cachedInv.getResult()) > 0) {
+            ItemStack resultItem = cachedInv.getResult().clone();
+            ItemStack returnItem = resultItem.clone();
 
-	@Override
-	public int howMuchSpaceForItemAsync(WrappedDirection insertDirection, ItemStack insertion) {
-		try {
-			if (!cachedChunk.isLoaded()) {
-				return 0;
-			}
-			if (isInvLocked(cachedFurnace)) {
-				return 0;
-			}
-			if (ReflectionManager.isFurnaceBurnableItem(insertion)) {
-				if (insertDirection.isSide() || insertDirection == WrappedDirection.UP) {
-					return howManyItemsFit(insertion, cachedInv.getSmelting());
-				} else if (ReflectionManager.isFurnaceFuelItem(insertion)) {
-					return howManyItemsFit(insertion, cachedInv.getFuel());
-				} else {
-					return 0;
-				}
-			} else if (ReflectionManager.isFurnaceFuelItem(insertion)) {
-				return howManyItemsFit(insertion, cachedInv.getFuel());
-			} else {
-				return 0;
-			}
-		} catch (Exception exception) {
-			exception.printStackTrace();
-			Sentry.capture(exception);
-		}
-		return 0;
-	}
+            int resultItemAmount = resultItem.getAmount();
+            resultItem.setAmount(Math.max(resultItemAmount - amount, 0));
+            cachedInv.setResult(resultItem.getAmount() >= 1 ? resultItem : null);
 
-	@Override
-	public void updateBlock() {
-		try {
-			this.cachedChunk = block.getChunk();
-			this.cachedFurnace = ((Furnace) block.getState());
-			this.cachedInv = cachedFurnace.getInventory();
-		} catch (Exception exception) {
-			exception.printStackTrace();
-			Sentry.capture(exception);
-		}
-	}
+            returnItem.setAmount(Math.min(amount, resultItemAmount));
+
+            return returnItem;
+        }
+        return null;
+    }
+
+    @Override
+    public ItemStack insertItem(TPDirection insertDirection, ItemStack insertion) {
+        if (!isInLoadedChunk()) {
+            return insertion;
+        }
+        if (isInvLocked(cachedFurnace)) {
+            return insertion;
+        }
+        if (insertDirection == TPDirection.DOWN) {
+            if (NMSUtils.isFurnaceBurnableItem(insertion)) {
+                ItemStack oldSmelting = cachedInv.getSmelting();
+                cachedInv.setSmelting(accumulateItems(oldSmelting, insertion));
+                if (insertion == null || insertion.getAmount() == 0) {
+                    insertion = null;
+                }
+            }
+        } else if (insertDirection == TPDirection.UP) {
+            if (NMSUtils.isFurnaceFuelItem(insertion)) {
+                ItemStack oldFuel = cachedInv.getFuel();
+                cachedInv.setFuel(accumulateItems(oldFuel, insertion));
+                if (insertion == null || insertion.getAmount() == 0) {
+                    insertion = null;
+                }
+            }
+        } else {
+            if (NMSUtils.isFurnaceBurnableItem(insertion)) {
+                ItemStack oldSmelting = cachedInv.getSmelting();
+                cachedInv.setSmelting(accumulateItems(oldSmelting, insertion));
+                if (insertion == null || insertion.getAmount() == 0) {
+                    insertion = null;
+                }
+            } else if (NMSUtils.isFurnaceFuelItem(insertion)) {
+                ItemStack oldFuel = cachedInv.getFuel();
+                cachedInv.setFuel(accumulateItems(oldFuel, insertion));
+                if (insertion == null || insertion.getAmount() == 0) {
+                    insertion = null;
+                }
+            }
+        }
+
+        return insertion;
+    }
+
+    @Override
+    public int spaceForItem(TPDirection insertDirection, ItemStack insertion) {
+        if (isInvLocked(cachedFurnace)) {
+            return 0;
+        }
+        if (NMSUtils.isFurnaceBurnableItem(insertion)) {
+            if (insertDirection.isSide() || insertDirection == TPDirection.DOWN) {
+                return spaceForItem(cachedInv.getSmelting(), insertion);
+            } else if (NMSUtils.isFurnaceFuelItem(insertion)) {
+                return spaceForItem(cachedInv.getFuel(), insertion);
+            }
+        } else if (NMSUtils.isFurnaceFuelItem(insertion)) {
+            return spaceForItem(cachedInv.getFuel(), insertion);
+        }
+        return 0;
+    }
+
+    @Override
+    public void updateBlock() {
+        this.cachedFurnace = ((Furnace) block.getState());
+        this.cachedInv = cachedFurnace.getInventory();
+    }
 
 }

@@ -1,246 +1,151 @@
 package de.robotricker.transportpipes.duct.pipe;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.Set;
+import net.querz.nbt.CompoundTag;
+import net.querz.nbt.ListTag;
 
-import org.bukkit.Location;
+import org.bukkit.ChatColor;
+import org.bukkit.Chunk;
+import org.bukkit.Material;
+import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
-import com.flowpowered.nbt.CompoundMap;
-import com.flowpowered.nbt.CompoundTag;
-import com.flowpowered.nbt.Tag;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 import de.robotricker.transportpipes.TransportPipes;
-import de.robotricker.transportpipes.api.TransportPipesContainer;
-import de.robotricker.transportpipes.duct.ClickableDuct;
-import de.robotricker.transportpipes.duct.DuctSharedInv;
-import de.robotricker.transportpipes.duct.InventoryDuct;
-import de.robotricker.transportpipes.duct.pipe.goldenpipe.GoldenPipeInv;
-import de.robotricker.transportpipes.duct.pipe.utils.FilteringMode;
-import de.robotricker.transportpipes.duct.pipe.utils.PipeType;
-import de.robotricker.transportpipes.pipeitems.ItemData;
-import de.robotricker.transportpipes.pipeitems.PipeItem;
-import de.robotricker.transportpipes.utils.BlockLoc;
-import de.robotricker.transportpipes.utils.WrappedDirection;
-import de.robotricker.transportpipes.utils.ductdetails.DuctDetails;
-import de.robotricker.transportpipes.utils.ductdetails.PipeDetails;
-import de.robotricker.transportpipes.utils.staticutils.DuctItemUtils;
-import de.robotricker.transportpipes.utils.staticutils.InventoryUtils;
-import de.robotricker.transportpipes.utils.staticutils.NBTUtils;
+import de.robotricker.transportpipes.config.LangConf;
+import de.robotricker.transportpipes.duct.manager.DuctManager;
+import de.robotricker.transportpipes.duct.manager.GlobalDuctManager;
+import de.robotricker.transportpipes.duct.pipe.filter.ItemDistributorService;
+import de.robotricker.transportpipes.duct.pipe.filter.ItemFilter;
+import de.robotricker.transportpipes.duct.pipe.items.PipeItem;
+import de.robotricker.transportpipes.duct.types.DuctType;
+import de.robotricker.transportpipes.inventory.DuctSettingsInventory;
+import de.robotricker.transportpipes.inventory.GoldenPipeSettingsInventory;
+import de.robotricker.transportpipes.items.ItemService;
+import de.robotricker.transportpipes.location.BlockLocation;
+import de.robotricker.transportpipes.location.TPDirection;
 
-public class GoldenPipe extends Pipe implements ClickableDuct, InventoryDuct {
+public class GoldenPipe extends Pipe {
 
-	public static final int ITEMS_PER_ROW = 32;
+    private ItemFilter[] itemFilters;
 
-	// 1st dimension: output dirs in order of PipeDirection.values() | 2nd
-	// dimension: output items in this direction
-	private ItemData[][] filteringItems;
-	private FilteringMode[] filteringModes;
+    public GoldenPipe(DuctType ductType, BlockLocation blockLoc, World world, Chunk chunk, DuctSettingsInventory settingsInv, GlobalDuctManager globalDuctManager, ItemDistributorService itemDistributor) {
+        super(ductType, blockLoc, world, chunk, settingsInv, globalDuctManager, itemDistributor);
+        itemFilters = new ItemFilter[Color.values().length];
+        for (int i = 0; i < Color.values().length; i++) {
+            itemFilters[i] = new ItemFilter();
+        }
+    }
 
-	private GoldenPipeInv inventory;
+    public ItemFilter getItemFilter(Color gpc) {
+        return itemFilters[gpc.ordinal()];
+    }
 
-	public GoldenPipe(Location blockLoc) {
-		super(blockLoc);
-		filteringItems = new ItemData[6][ITEMS_PER_ROW];
-		filteringModes = new FilteringMode[6];
-		for (int i = 0; i < 6; i++) {
-			filteringModes[i] = FilteringMode.FILTERBY_TYPE_DAMAGE_NBT;
-		}
-		inventory = new GoldenPipeInv(this);
-	}
+    public void setItemFilter(Color gpc, ItemFilter itemFilter) {
+        itemFilters[gpc.ordinal()] = itemFilter;
+    }
 
-	@Override
-	public Map<WrappedDirection, Integer> handleArrivalAtMiddle(PipeItem item, WrappedDirection before, Collection<WrappedDirection> possibleDirs) {
-		Map<WrappedDirection, Integer> absWeights = calculateAbsWeights(new ItemData(item.getItem()), before, possibleDirs);
+    @Override
+    protected Map<TPDirection, Integer> calculateItemDistribution(PipeItem pipeItem, TPDirection movingDir, List<TPDirection> dirs, TransportPipes transportPipes) {
+        Map<TPDirection, Integer> absWeights = new HashMap<>();
+        for (TPDirection dir : dirs) {
+            int amount = getItemFilter(Color.getByDir(dir)).applyFilter(pipeItem.getItem());
+            absWeights.put(dir, amount);
+        }
+        return itemDistributor.splitPipeItem(pipeItem.getItem(), absWeights, this);
+    }
 
-		return getItemDistribution().splitPipeItem(item.getItem(), possibleDirs, absWeights);
-	}
+    @Override
+    public Material getBreakParticleData() {
+        return Material.GOLD_BLOCK;
+    }
 
-	private Map<WrappedDirection, Integer> calculateAbsWeights(ItemData itemData, WrappedDirection before, Collection<WrappedDirection> possibleDirs) {
-		Map<WrappedDirection, Integer> absWeights = new HashMap<>();
-		Set<WrappedDirection> emptyDirections = new HashSet<>();
+    @Override
+    public List<ItemStack> destroyed(TransportPipes transportPipes, DuctManager ductManager, Player destroyer) {
+        List<ItemStack> drop = super.destroyed(transportPipes, ductManager, destroyer);
+        for (Color gpc : Color.values()) {
+            drop.addAll(getItemFilter(gpc).getAsItemStacks());
+        }
+        return drop;
+    }
 
-		for (int line = 0; line < 6; line++) {
-			WrappedDirection dir = WrappedDirection.fromID(line);
+    @Override
+    public void saveToNBTTag(CompoundTag compoundTag, ItemService itemService) {
+        super.saveToNBTTag(compoundTag, itemService);
 
-			// item shouldn't go directly back
-			if (dir.getOpposite() == before) {
-				continue;
-			}
-			// ignore direction if there isn't any pipe or container
-			if (!possibleDirs.contains(dir)) {
-				continue;
-			}
+        ListTag<CompoundTag> itemFiltersTag = new ListTag<>(CompoundTag.class);
+        for (Color color : Color.values()) {
+            CompoundTag filterCompoundTag = new CompoundTag();
+            ItemFilter itemFilter = getItemFilter(color);
+            itemFilter.saveToNBTTag(filterCompoundTag, itemService);
+            itemFiltersTag.add(filterCompoundTag);
+        }
+        compoundTag.put("itemFilters", itemFiltersTag);
 
-			FilteringMode filteringMode = getFilteringMode(line);
+    }
 
-			List<ItemData> filterItems = new ArrayList<ItemData>();
-			for (ItemData filterItem : filteringItems[line]) {
-				if (filterItem != null) {
-					filterItems.add(filterItem);
-				}
-			}
+    @Override
+    public void loadFromNBTTag(CompoundTag compoundTag, ItemService itemService) {
+        super.loadFromNBTTag(compoundTag, itemService);
 
-			int weight = itemData.applyFilter(filterItems, filteringMode, true);
-			if (weight > 0) {
-				absWeights.put(dir, weight);
-			} else if (itemData.applyFilter(filterItems, filteringMode, false) > 0) {
-				emptyDirections.add(dir);
-			}
+        ListTag<CompoundTag> itemFiltersTag = (ListTag<CompoundTag>) compoundTag.getListTag("itemFilters");
+        for (Color color : Color.values()) {
+            ItemFilter itemFilter = new ItemFilter();
+            itemFilter.loadFromNBTTag(itemFiltersTag.get(color.ordinal()), itemService);
+            itemFilters[color.ordinal()] = itemFilter;
+        }
 
-		}
+        settingsInv.populate();
+    }
 
-		if (absWeights.isEmpty()) {
-			for (WrappedDirection wd : emptyDirections) {
-				absWeights.put(wd, 1);
-			}
-		}
+    public enum Color {
 
-		return absWeights;
-	}
+        BLUE(Material.BLUE_WOOL, Material.BLUE_STAINED_GLASS_PANE, LangConf.Key.COLORS_BLUE.get(), TPDirection.EAST),
+        YELLOW(Material.YELLOW_WOOL, Material.YELLOW_STAINED_GLASS_PANE, LangConf.Key.COLORS_YELLOW.get(), TPDirection.WEST),
+        RED(Material.RED_WOOL, Material.RED_STAINED_GLASS_PANE, LangConf.Key.COLORS_RED.get(), TPDirection.SOUTH),
+        WHITE(Material.WHITE_WOOL, Material.WHITE_STAINED_GLASS_PANE, LangConf.Key.COLORS_WHITE.get(), TPDirection.NORTH),
+        GREEN(Material.LIME_WOOL, Material.LIME_STAINED_GLASS_PANE, LangConf.Key.COLORS_GREEN.get(), TPDirection.UP),
+        BLACK(Material.BLACK_WOOL, Material.BLACK_STAINED_GLASS_PANE, LangConf.Key.COLORS_BLACK.get(), TPDirection.DOWN);
 
-	@Override
-	public void saveToNBTTag(CompoundMap tags) {
-		super.saveToNBTTag(tags);
+        private Material woolMaterial;
+        private Material glassPaneMaterial;
+        private String displayName;
+        private TPDirection direction;
 
-		List<Tag<?>> linesList = new ArrayList<>();
+        Color(Material woolMaterial, Material glassPaneMaterial, String displayName, TPDirection direction) {
+            this.woolMaterial = woolMaterial;
+            this.glassPaneMaterial = glassPaneMaterial;
+            this.displayName = displayName;
+            this.direction = direction;
+        }
 
-		for (int line = 0; line < 6; line++) {
-			CompoundTag lineCompound = new CompoundTag("Line", new CompoundMap());
+        public Material getWoolMaterial() {
+            return woolMaterial;
+        }
 
-			NBTUtils.saveIntValue(lineCompound.getValue(), "Line", line);
+        public Material getGlassPaneMaterial() {
+            return glassPaneMaterial;
+        }
 
-			List<Tag<?>> lineList = new ArrayList<>();
-			for (int i = 0; i < filteringItems[line].length; i++) {
-				ItemData itemData = filteringItems[line][i];
-				if (itemData != null) {
-					lineList.add(itemData.toNBTTag());
-				} else {
-					lineList.add(InventoryUtils.createNullItemNBTTag());
-				}
-			}
-			NBTUtils.saveListValue(lineCompound.getValue(), "Items", CompoundTag.class, lineList);
-			NBTUtils.saveIntValue(lineCompound.getValue(), "FilteringMode", getFilteringMode(line).getId());
+        public String getDisplayName() {
+            return displayName;
+        }
 
-			linesList.add(lineCompound);
-		}
+        public TPDirection getDirection() {
+            return direction;
+        }
 
-		NBTUtils.saveListValue(tags, "Lines", CompoundTag.class, linesList);
-
-	}
-
-	@Override
-	public void loadFromNBTTag(CompoundTag tag, long datFileVersion) {
-		super.loadFromNBTTag(tag, datFileVersion);
-
-		CompoundMap map = tag.getValue();
-		if (NBTUtils.readListTag(map.get("Lines")).isEmpty()) {
-			// old lines version
-			for (int line = 0; line < 6; line++) {
-
-				List<Tag<?>> lineList = NBTUtils.readListTag(map.get("Line" + line));
-				for (int i = 0; i < filteringItems[line].length; i++) {
-					if (lineList.size() > i) {
-						ItemData itemData = ItemData.fromNBTTag((CompoundTag) lineList.get(i));
-						filteringItems[line][i] = itemData;
-					}
-				}
-
-				FilteringMode fm = FilteringMode.fromId(NBTUtils.readIntTag(map.get("Line" + line + "_filteringMode"), FilteringMode.FILTERBY_TYPE_DAMAGE_NBT.getId()));
-				setFilteringMode(line, fm);
-
-			}
-		} else {
-			// new list version
-			List<Tag<?>> linesList = NBTUtils.readListTag(map.get("Lines"));
-			for (Tag<?> lineTag : linesList) {
-				CompoundTag lineCompound = (CompoundTag) lineTag;
-				int line = NBTUtils.readIntTag(lineCompound.getValue().get("Line"), -1);
-				if (line != -1) {
-					List<Tag<?>> itemsList = NBTUtils.readListTag(lineCompound.getValue().get("Items"));
-					int i = 0;
-					for (Tag<?> itemTag : itemsList) {
-						if (itemsList.size() > i) {
-							ItemData itemData = ItemData.fromNBTTag((CompoundTag) itemTag);
-							filteringItems[line][i] = itemData;
-						}
-						i++;
-					}
-
-					FilteringMode fm = FilteringMode.fromId(NBTUtils.readIntTag(lineCompound.getValue().get("FilteringMode"), FilteringMode.FILTERBY_TYPE_DAMAGE_NBT.getId()));
-					setFilteringMode(line, fm);
-				}
-			}
-		}
-
-	}
-
-	@Override
-	public int[] getBreakParticleData() {
-		return new int[] { 41, 0 };
-	}
-
-	@Override
-	public void click(Player p, WrappedDirection side) {
-		getDuctInventory(p).openOrUpdateInventory(p);
-	}
-
-	@Override
-	public DuctSharedInv getDuctInventory(Player p) {
-		return inventory;
-	}
-
-	public ItemData[] getFilteringItems(WrappedDirection pd) {
-		return filteringItems[pd.getId()];
-	}
-
-	public FilteringMode getFilteringMode(int line) {
-		return filteringModes[line];
-	}
-
-	public void setFilteringMode(int line, FilteringMode filteringMode) {
-		filteringModes[line] = filteringMode;
-	}
-
-	public void changeFilteringItems(WrappedDirection pd, ItemData[] items) {
-		for (int i = 0; i < filteringItems[pd.getId()].length; i++) {
-			if (i < items.length) {
-				filteringItems[pd.getId()][i] = items[i];
-			} else {
-				filteringItems[pd.getId()][i] = null;
-			}
-		}
-	}
-
-	@Override
-	public PipeType getPipeType() {
-		return PipeType.GOLDEN;
-	}
-
-	@Override
-	public List<ItemStack> getDroppedItems() {
-		List<ItemStack> is = new ArrayList<>();
-		is.add(DuctItemUtils.getClonedDuctItem(new PipeDetails(getPipeType())));
-		for (int line = 0; line < 6; line++) {
-			for (int i = 0; i < filteringItems[line].length; i++) {
-				if (filteringItems[line][i] != null) {
-					is.add(filteringItems[line][i].toItemStack());
-				}
-			}
-		}
-		return is;
-	}
-
-	@Override
-	public DuctDetails getDuctDetails() {
-		return new PipeDetails(getPipeType());
-	}
+        public static Color getByDir(TPDirection dir) {
+            for (Color c : values()) {
+                if (c.direction.equals(dir)) {
+                    return c;
+                }
+            }
+            return null;
+        }
+    }
 
 }

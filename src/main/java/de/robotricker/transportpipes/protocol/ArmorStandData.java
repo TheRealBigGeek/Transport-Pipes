@@ -3,89 +3,83 @@ package de.robotricker.transportpipes.protocol;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.Vector;
 
-import de.robotricker.transportpipes.pipeitems.RelLoc;
+import java.util.Objects;
 
-public class ArmorStandData {
+import de.robotricker.transportpipes.location.RelativeLocation;
 
-	private RelLoc loc;
-	private boolean small;
-	private Vector direction;
-	private ItemStack headItem;
-	private ItemStack handItem;
-	private Vector headRotation;
-	private Vector armRotation;
-	private int entityID = -1;
+public class ArmorStandData implements Cloneable {
 
-	public ArmorStandData(RelLoc loc, Vector direction, boolean small, ItemStack headItem, ItemStack handItem, Vector headRotation, Vector armRotation) {
-		this.loc = loc;
-		this.small = small;
-		this.headItem = headItem;
-		this.handItem = handItem;
-		this.headRotation = headRotation;
-		this.armRotation = armRotation;
-		this.direction = direction;
-	}
+    private RelativeLocation relLoc;
+    private boolean small;
+    private Vector direction;
+    private Vector headRotation;
+    private Vector armRotation;
+    private ItemStack headItem;
+    private ItemStack handItem;
+    private int entityID = -1;
 
-	public RelLoc getLoc() {
-		return loc;
-	}
+    public ArmorStandData(RelativeLocation relLoc, boolean small, Vector direction, Vector headRotation, Vector armRotation, ItemStack headItem, ItemStack handItem) {
+        this.relLoc = relLoc;
+        this.small = small;
+        this.direction = direction;
+        this.headRotation = headRotation;
+        this.armRotation = armRotation;
+        this.headItem = headItem;
+        this.handItem = handItem;
+    }
 
-	public boolean isSmall() {
-		return small;
-	}
+    public RelativeLocation getRelLoc() {
+        return relLoc;
+    }
 
-	public ItemStack getHeadItem() {
-		return headItem;
-	}
+    public boolean isSmall() {
+        return small;
+    }
 
-	public ItemStack getHandItem() {
-		return handItem;
-	}
+    public Vector getDirection() {
+        return direction;
+    }
 
-	public Vector getHeadRotation() {
-		return headRotation;
-	}
+    public Vector getHeadRotation() {
+        return headRotation;
+    }
 
-	public Vector getArmRotation() {
-		return armRotation;
-	}
+    public Vector getArmRotation() {
+        return armRotation;
+    }
 
-	public Vector getDirection() {
-		return direction;
-	}
+    public ItemStack getHeadItem() {
+        return headItem;
+    }
 
-	public int getEntityID() {
-		return entityID;
-	}
+    public ItemStack getHandItem() {
+        return handItem;
+    }
 
-	public void setEntityID(int entityID) {
-		this.entityID = entityID;
-	}
+    public int getEntityID() {
+        return entityID;
+    }
 
-	public ArmorStandData clone(ItemStack headItem) {
-		return new ArmorStandData(loc, direction, small, headItem, handItem, headRotation, armRotation);
-	}
+    public void setEntityID(int entityID) {
+        this.entityID = entityID;
+    }
 
-	public boolean isSimilar(ArmorStandData asd) {
-		if(asd == null){
-			return false;
-		}
-		if (RelLoc.compare(this.loc, asd.loc)) {
-			if (direction.equals(asd.direction)) {
-				if (small == asd.small) {
-					if ((headItem != null && headItem.isSimilar(asd.headItem)) || headItem == asd.headItem) {
-						if ((handItem != null && handItem.isSimilar(asd.handItem)) || handItem == asd.handItem) {
-							if (headRotation.equals(asd.headRotation)) {
-								if (armRotation.equals(asd.armRotation)) {
-									return true;
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		return false;
-	}
+    @Override
+    public ArmorStandData clone() {
+        return new ArmorStandData(relLoc, small, direction, headRotation, armRotation, headItem, handItem);
+    }
+
+    public boolean isSimilar(ArmorStandData armorStandData) {
+        if (armorStandData == null) {
+            return false;
+        }
+        return Objects.equals(relLoc, armorStandData.relLoc) &&
+                small == armorStandData.small &&
+                Objects.equals(direction, armorStandData.direction) &&
+                Objects.equals(headRotation, armorStandData.headRotation) &&
+                Objects.equals(armRotation, armorStandData.armRotation) &&
+                Objects.equals(headItem, armorStandData.headItem) &&
+                Objects.equals(handItem, armorStandData.handItem);
+    }
 
 }

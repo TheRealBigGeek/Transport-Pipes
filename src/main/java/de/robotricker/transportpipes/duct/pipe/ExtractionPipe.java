@@ -1,383 +1,170 @@
 package de.robotricker.transportpipes.duct.pipe;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
+import net.querz.nbt.CompoundTag;
 
-import org.bukkit.Bukkit;
-import org.bukkit.Location;
+import org.bukkit.Chunk;
 import org.bukkit.Material;
+import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 
-import com.flowpowered.nbt.CompoundMap;
-import com.flowpowered.nbt.CompoundTag;
-import com.flowpowered.nbt.Tag;
+import java.util.List;
+import java.util.Map;
 
 import de.robotricker.transportpipes.TransportPipes;
 import de.robotricker.transportpipes.api.TransportPipesContainer;
-import de.robotricker.transportpipes.duct.ClickableDuct;
-import de.robotricker.transportpipes.duct.DuctSharedInv;
-import de.robotricker.transportpipes.duct.InventoryDuct;
-import de.robotricker.transportpipes.duct.pipe.extractionpipe.ExtractionPipeInv;
-import de.robotricker.transportpipes.duct.pipe.utils.FilteringMode;
-import de.robotricker.transportpipes.duct.pipe.utils.PipeType;
-import de.robotricker.transportpipes.pipeitems.ItemData;
-import de.robotricker.transportpipes.pipeitems.PipeItem;
-import de.robotricker.transportpipes.utils.BlockLoc;
-import de.robotricker.transportpipes.utils.WrappedDirection;
-import de.robotricker.transportpipes.utils.config.LocConf;
-import de.robotricker.transportpipes.utils.ductdetails.DuctDetails;
-import de.robotricker.transportpipes.utils.ductdetails.PipeDetails;
-import de.robotricker.transportpipes.utils.hitbox.TimingCloseable;
-import de.robotricker.transportpipes.utils.staticutils.DuctItemUtils;
-import de.robotricker.transportpipes.utils.staticutils.InventoryUtils;
-import de.robotricker.transportpipes.utils.staticutils.NBTUtils;
-import io.sentry.Sentry;
+import de.robotricker.transportpipes.duct.manager.DuctManager;
+import de.robotricker.transportpipes.duct.manager.GlobalDuctManager;
+import de.robotricker.transportpipes.duct.manager.PipeManager;
+import de.robotricker.transportpipes.duct.pipe.extractionpipe.ExtractAmount;
+import de.robotricker.transportpipes.duct.pipe.extractionpipe.ExtractCondition;
+import de.robotricker.transportpipes.duct.pipe.filter.ItemDistributorService;
+import de.robotricker.transportpipes.duct.pipe.filter.ItemFilter;
+import de.robotricker.transportpipes.duct.pipe.items.PipeItem;
+import de.robotricker.transportpipes.duct.types.DuctType;
+import de.robotricker.transportpipes.inventory.DuctSettingsInventory;
+import de.robotricker.transportpipes.items.ItemService;
+import de.robotricker.transportpipes.location.BlockLocation;
+import de.robotricker.transportpipes.location.TPDirection;
 
-public class ExtractionPipe extends Pipe implements ClickableDuct, InventoryDuct {
+public class ExtractionPipe extends Pipe {
 
-	private WrappedDirection extractDirection;
-	private ExtractCondition extractCondition;
-	private ExtractAmount extractAmount;
-	private FilteringMode filteringMode;
-	private ItemData[] filteringItems;
+    private TPDirection extractDirection;
+    private ExtractCondition extractCondition;
+    private ExtractAmount extractAmount;
+    private ItemFilter itemFilter;
 
-	private ExtractionPipeInv inventory;
+    public ExtractionPipe(DuctType ductType, BlockLocation blockLoc, World world, Chunk chunk, DuctSettingsInventory settingsInv, GlobalDuctManager globalDuctManager, ItemDistributorService itemDistributor) {
+        super(ductType, blockLoc, world, chunk, settingsInv, globalDuctManager, itemDistributor);
+        this.extractDirection = null;
+        this.extractCondition = ExtractCondition.NEEDS_REDSTONE;
+        this.extractAmount = ExtractAmount.EXTRACT_1;
+        this.itemFilter = new ItemFilter();
+    }
 
-	public ExtractionPipe(Location blockLoc) {
-		super(blockLoc);
-		extractDirection = null;
-		extractCondition = ExtractCondition.NEEDS_REDSTONE;
-		extractAmount = ExtractAmount.EXTRACT_1;
-		filteringMode = FilteringMode.FILTERBY_TYPE_DAMAGE_NBT;
-		filteringItems = new ItemData[GoldenPipe.ITEMS_PER_ROW];
+    @Override
+    public void syncBigTick(DuctManager ductManager) {
+        super.syncBigTick(ductManager);
 
-		this.inventory = new ExtractionPipeInv(this);
-	}
+        PipeManager pipeManager = (PipeManager) ductManager;
 
-	@Override
-	public Map<WrappedDirection, Integer> handleArrivalAtMiddle(PipeItem item, WrappedDirection before, Collection<WrappedDirection> possibleDirs) {
-		Iterator<WrappedDirection> it = possibleDirs.iterator();
-		while (it.hasNext()) {
-			WrappedDirection pd = it.next();
-			if (pd.equals(before.getOpposite())) {
-				it.remove();
-			}
-		}
-		return getItemDistribution().splitPipeItem(item.getItem(), possibleDirs, null);
-	}
+        if (extractDirection == null || extractCondition == ExtractCondition.NEVER_EXTRACT) {
+            return;
+        }
 
-	@Override
-	public void saveToNBTTag(CompoundMap tags) {
-		super.saveToNBTTag(tags);
-		NBTUtils.saveIntValue(tags, "ExtractDirection", extractDirection == null ? -1 : extractDirection.getId());
-		NBTUtils.saveIntValue(tags, "ExtractCondition", extractCondition.getId());
-		NBTUtils.saveIntValue(tags, "ExtractAmount", extractAmount.getId());
+        //extract item
+        TransportPipesContainer container = pipeManager.getContainerAtLoc(getWorld(), getBlockLoc().getNeighbor(extractDirection));
+        if (container != null) {
+            if (extractCondition == ExtractCondition.NEEDS_REDSTONE) {
+                Block block = getBlockLoc().toBlock(getWorld());
+                if (!block.isBlockIndirectlyPowered() && !block.isBlockPowered()) {
+                    return;
+                }
+            }
+            ItemStack item = container.extractItem(extractDirection, extractAmount.getAmount(), itemFilter);
+            if (item != null) {
+                PipeItem pipeItem = new PipeItem(item, getWorld(), getBlockLoc(), extractDirection.getOpposite());
+                pipeManager.spawnPipeItem(pipeItem);
+                pipeManager.putPipeItemInPipe(pipeItem);
+            }
+        }
 
-		List<Tag<?>> lineList = new ArrayList<>();
-		for (int i = 0; i < filteringItems.length; i++) {
-			ItemData itemData = filteringItems[i];
-			if (itemData != null) {
-				lineList.add(itemData.toNBTTag());
-			} else {
-				lineList.add(InventoryUtils.createNullItemNBTTag());
-			}
-		}
-		NBTUtils.saveListValue(tags, "Items", CompoundTag.class, lineList);
-		NBTUtils.saveIntValue(tags, "FilteringMode", filteringMode.getId());
+    }
 
-	}
+    public void updateExtractDirection(boolean cycle) {
+        TPDirection oldExtractDirection = getExtractDirection();
+        Map<TPDirection, TransportPipesContainer> containerConnections = getContainerConnections();
+        if (containerConnections.isEmpty()) {
+            extractDirection = null;
+        } else if (cycle || extractDirection == null || !containerConnections.containsKey(extractDirection)) {
+            do {
+                if (extractDirection == null) {
+                    extractDirection = TPDirection.NORTH;
+                } else {
+                    extractDirection = extractDirection.next();
+                }
+            } while (!containerConnections.containsKey(extractDirection));
+        }
+        if (oldExtractDirection != getExtractDirection()) {
+            globalDuctManager.updateDuctInRenderSystems(this, true);
+            settingsInv.populate();
+        }
+    }
 
-	@Override
-	public void loadFromNBTTag(CompoundTag tag, long datFileVersion) {
-		super.loadFromNBTTag(tag, datFileVersion);
+    public TPDirection getExtractDirection() {
+        return extractDirection;
+    }
 
-		int extractDirectionId = NBTUtils.readIntTag(tag.getValue().get("ExtractDirection"), -1);
-		if (extractDirectionId == -1) {
-			setExtractDirection(null);
-		} else {
-			setExtractDirection(WrappedDirection.fromID(extractDirectionId));
-		}
-		setExtractCondition(ExtractCondition.fromId(NBTUtils.readIntTag(tag.getValue().get("ExtractCondition"), ExtractCondition.NEEDS_REDSTONE.getId())));
-		setExtractAmount(ExtractAmount.fromId(NBTUtils.readIntTag(tag.getValue().get("ExtractAmount"), ExtractAmount.EXTRACT_1.getId())));
+    public void setExtractDirection(TPDirection extractDirection) {
+        this.extractDirection = extractDirection;
+    }
 
-		List<Tag<?>> itemsList = NBTUtils.readListTag(tag.getValue().get("Items"));
-		int i = 0;
-		for (Tag<?> itemTag : itemsList) {
-			if (itemsList.size() > i) {
-				ItemData itemData = ItemData.fromNBTTag((CompoundTag) itemTag);
-				filteringItems[i] = itemData;
-			}
-			i++;
-		}
-		setFilteringMode(FilteringMode.fromId(NBTUtils.readIntTag(tag.getValue().get("FilteringMode"), FilteringMode.FILTERBY_TYPE_DAMAGE_NBT.getId())));
-	}
+    public ExtractCondition getExtractCondition() {
+        return extractCondition;
+    }
 
-	@Override
-	public void click(Player p, WrappedDirection side) {
-		getDuctInventory(p).openOrUpdateInventory(p);
-	}
+    public void setExtractCondition(ExtractCondition extractCondition) {
+        this.extractCondition = extractCondition;
+    }
 
-	@Override
-	public DuctSharedInv getDuctInventory(Player p) {
-		return inventory;
-	}
+    public ExtractAmount getExtractAmount() {
+        return extractAmount;
+    }
 
-	@Override
-	public PipeType getPipeType() {
-		return PipeType.EXTRACTION;
-	}
+    public void setExtractAmount(ExtractAmount extractAmount) {
+        this.extractAmount = extractAmount;
+    }
 
-	@Override
-	public List<ItemStack> getDroppedItems() {
-		List<ItemStack> is = new ArrayList<>();
-		is.add(DuctItemUtils.getClonedDuctItem(new PipeDetails(getPipeType())));
-		return is;
-	}
+    public ItemFilter getItemFilter() {
+        return itemFilter;
+    }
 
-	public WrappedDirection getExtractDirection() {
-		return extractDirection;
-	}
+    public void setItemFilter(ItemFilter itemFilter) {
+        this.itemFilter = itemFilter;
+    }
 
-	public void setExtractDirection(WrappedDirection extractDirection) {
-		this.extractDirection = extractDirection;
-	}
+    @Override
+    public Material getBreakParticleData() {
+        return Material.OAK_PLANKS;
+    }
 
-	public ExtractCondition getExtractCondition() {
-		return extractCondition;
-	}
+    @Override
+    public List<ItemStack> destroyed(TransportPipes transportPipes, DuctManager ductManager, Player destroyer) {
+        List<ItemStack> drop = super.destroyed(transportPipes, ductManager, destroyer);
+        drop.addAll(itemFilter.getAsItemStacks());
+        return drop;
+    }
 
-	public void setExtractCondition(ExtractCondition extractCondition) {
-		this.extractCondition = extractCondition;
-	}
+    @Override
+    public void notifyConnectionChange() {
+        super.notifyConnectionChange();
+        updateExtractDirection(false);
+    }
 
-	public ExtractAmount getExtractAmount() {
-		return extractAmount;
-	}
+    @Override
+    public void saveToNBTTag(CompoundTag compoundTag, ItemService itemService) {
+        super.saveToNBTTag(compoundTag, itemService);
 
-	public void setExtractAmount(ExtractAmount extractAmount) {
-		this.extractAmount = extractAmount;
-	}
+        compoundTag.putInt("extractDir", extractDirection != null ? extractDirection.ordinal() : -1);
+        compoundTag.putInt("extractCondition", extractCondition.ordinal());
+        compoundTag.putInt("extractAmount", extractAmount.ordinal());
+        CompoundTag itemFilterTag = new CompoundTag();
+        itemFilter.saveToNBTTag(itemFilterTag, itemService);
+        compoundTag.put("itemFilter", itemFilterTag);
 
-	public FilteringMode getFilteringMode() {
-		return filteringMode;
-	}
+    }
 
-	public void setFilteringMode(FilteringMode filteringMode) {
-		this.filteringMode = filteringMode;
-	}
+    @Override
+    public void loadFromNBTTag(CompoundTag compoundTag, ItemService itemService) {
+        super.loadFromNBTTag(compoundTag, itemService);
 
-	public ItemData[] getFilteringItems() {
-		return filteringItems;
-	}
+        extractDirection = compoundTag.getInt("extractDir") != -1 ? TPDirection.values()[compoundTag.getInt("extractDir")] : null;
+        extractCondition = ExtractCondition.values()[compoundTag.getInt("extractCondition")];
+        extractAmount = ExtractAmount.values()[compoundTag.getInt("extractAmount")];
+        itemFilter = new ItemFilter();
+        itemFilter.loadFromNBTTag(compoundTag.getCompoundTag("itemFilter"), itemService);
 
-	public void changeFilteringItems(ItemData[] items) {
-		for (int i = 0; i < filteringItems.length; i++) {
-			if (i < items.length) {
-				filteringItems[i] = items[i];
-			} else {
-				filteringItems[i] = null;
-			}
-		}
-	}
-
-	/**
-	 * checks if the current extract direction is valid and updates it to a valid
-	 * value if necessary
-	 * 
-	 * @param cycle
-	 *            whether the direction should really cycle or just be checked for
-	 *            validity
-	 */
-	public void checkAndUpdateExtractDirection(boolean cycle) {
-		WrappedDirection oldExtractDirection = getExtractDirection();
-
-		List<WrappedDirection> blockConnections = getOnlyBlockConnections();
-		if (blockConnections.isEmpty()) {
-			extractDirection = null;
-		} else if (cycle || extractDirection == null || !blockConnections.contains(extractDirection)) {
-			do {
-				if (extractDirection == null) {
-					extractDirection = WrappedDirection.NORTH;
-				} else {
-					extractDirection = extractDirection.getNextDirection();
-				}
-			} while (!blockConnections.contains(extractDirection));
-		}
-
-		if (oldExtractDirection != extractDirection) {
-			TransportPipes.instance.pipeThread.runTask(new Runnable() {
-
-				public void run() {
-					TransportPipes.instance.ductManager.updateDuct(ExtractionPipe.this);
-				};
-			}, 0);
-		}
-	}
-
-	protected void extractItems(List<WrappedDirection> blockConnections) {
-
-		if (extractDirection == null) {
-			return;
-		}
-
-		if (blockConnections.contains(extractDirection)) {
-
-			final Location containerLoc = getBlockLoc().clone().add(extractDirection.getX(), extractDirection.getY(), extractDirection.getZ());
-
-			// input items
-			TransportPipes.runTask(new Runnable() {
-
-				@Override
-				public void run() {
-					try (TimingCloseable tc = new TimingCloseable("extract item scheduler")) {
-						if (!isInLoadedChunk()) {
-							return;
-						}
-						boolean powered = getExtractCondition() == ExtractCondition.ALWAYS_EXTRACT;
-						if (getExtractCondition() == ExtractCondition.NEEDS_REDSTONE) {
-							for (WrappedDirection pd : WrappedDirection.values()) {
-								Location relativeLoc = ExtractionPipe.this.getBlockLoc().clone().add(pd.getX(), pd.getY(), pd.getZ());
-
-								// don't power this pipe if at least 1 block around this pipe is inside an
-								// unloaded chunk
-								if (!TransportPipes.instance.blockChangeListener.isInLoadedChunk(relativeLoc)) {
-									break;
-								}
-
-								Block relative = relativeLoc.getBlock();
-								if (relative.getType() != Material.TRAPPED_CHEST && relative.getBlockPower(pd.getOpposite().toBlockFace()) > 0) {
-									powered = true;
-									break;
-								}
-
-							}
-						}
-						if (powered) {
-							BlockLoc bl = BlockLoc.convertBlockLoc(containerLoc);
-							TransportPipesContainer tpc = TransportPipes.instance.getContainerMap(getBlockLoc().getWorld()).get(bl);
-							WrappedDirection itemDir = extractDirection.getOpposite();
-							if (tpc != null) {
-								List<ItemData> filterItems = new ArrayList<ItemData>();
-								for (ItemData filterItem : filteringItems) {
-									if (filterItem != null) {
-										filterItems.add(filterItem);
-									}
-								}
-								ItemStack taken = tpc.extractItem(itemDir, getExtractAmount().getAmount(), filterItems, getFilteringMode());
-								if (taken != null) {
-									// extraction successful
-									PipeItem pi = new PipeItem(taken, ExtractionPipe.this.getBlockLoc(), itemDir);
-									tempPipeItemsWithSpawn.put(pi, itemDir);
-								}
-							}
-						}
-					} catch (Exception e) {
-						e.printStackTrace();
-					}
-				}
-			});
-
-		}
-	}
-
-	@Override
-	public int[] getBreakParticleData() {
-		return new int[] { 5, 0 };
-	}
-
-	@Override
-	public void notifyConnectionsChange() {
-		super.notifyConnectionsChange();
-		checkAndUpdateExtractDirection(false);
-	}
-
-	@Override
-	public DuctDetails getDuctDetails() {
-		return new PipeDetails(getPipeType());
-	}
-
-	public enum ExtractCondition {
-		NEEDS_REDSTONE(LocConf.EXTRACTIONPIPE_CONDITION_NEEDSREDSTONE, Material.REDSTONE, (short) 0),
-		ALWAYS_EXTRACT(LocConf.EXTRACTIONPIPE_CONDITION_ALWAYSEXTRACT, Material.INK_SACK, (short) 10),
-		NEVER_EXTRACT(LocConf.EXTRACTIONPIPE_CONDITION_NEVEREXTRACT, Material.BARRIER, (short) 0);
-
-		private String locConfKey;
-		private ItemStack displayItem;
-
-		private ExtractCondition(String locConfKey, Material type, short damage) {
-			this.locConfKey = locConfKey;
-			this.displayItem = new ItemStack(type, 1, damage);
-		}
-
-		public String getLocConfKey() {
-			return locConfKey;
-		}
-
-		public int getId() {
-			return this.ordinal();
-		}
-
-		public static ExtractCondition fromId(int id) {
-			return ExtractCondition.values()[id];
-		}
-
-		public ExtractCondition getNextCondition() {
-			if (getId() == ExtractCondition.values().length - 1) {
-				return fromId(0);
-			}
-			return fromId(getId() + 1);
-		}
-
-		public ItemStack getDisplayItem() {
-			return displayItem.clone();
-		}
-
-	}
-
-	public enum ExtractAmount {
-		EXTRACT_1(LocConf.EXTRACTIONPIPE_AMOUNT_EXTRACT1, 1),
-		EXTRACT_16(LocConf.EXTRACTIONPIPE_AMOUNT_EXTRACT16, 16);
-
-		private String locConfKey;
-		private ItemStack displayItem;
-
-		private ExtractAmount(String locConfKey, int amount) {
-			this.locConfKey = locConfKey;
-			this.displayItem = new ItemStack(Material.BRICK, amount);
-		}
-
-		public int getAmount() {
-			return displayItem.getAmount();
-		}
-
-		public String getLocConfKey() {
-			return locConfKey;
-		}
-
-		public int getId() {
-			return this.ordinal();
-		}
-
-		public static ExtractAmount fromId(int id) {
-			return ExtractAmount.values()[id];
-		}
-
-		public ExtractAmount getNextAmount() {
-			if (getId() == ExtractAmount.values().length - 1) {
-				return fromId(0);
-			}
-			return fromId(getId() + 1);
-		}
-
-		public ItemStack getDisplayItem() {
-			return displayItem.clone();
-		}
-	}
-
+        settingsInv.populate();
+    }
 }

@@ -1,124 +1,109 @@
 package de.robotricker.transportpipes.duct.pipe;
 
-import java.util.ArrayList;
-import java.util.Collection;
+import net.querz.nbt.CompoundTag;
+
+import org.bukkit.Chunk;
+import org.bukkit.Material;
+import org.bukkit.Sound;
+import org.bukkit.World;
+import org.bukkit.entity.Player;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
-import org.bukkit.Location;
-import org.bukkit.Sound;
-import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
-
-import com.flowpowered.nbt.CompoundMap;
-import com.flowpowered.nbt.CompoundTag;
-
-import de.robotricker.transportpipes.PipeThread;
 import de.robotricker.transportpipes.TransportPipes;
-import de.robotricker.transportpipes.duct.ClickableDuct;
-import de.robotricker.transportpipes.duct.pipe.utils.PipeType;
-import de.robotricker.transportpipes.pipeitems.PipeItem;
-import de.robotricker.transportpipes.utils.WrappedDirection;
-import de.robotricker.transportpipes.utils.ductdetails.DuctDetails;
-import de.robotricker.transportpipes.utils.ductdetails.PipeDetails;
-import de.robotricker.transportpipes.utils.staticutils.DuctItemUtils;
-import de.robotricker.transportpipes.utils.staticutils.NBTUtils;
+import de.robotricker.transportpipes.duct.manager.GlobalDuctManager;
+import de.robotricker.transportpipes.duct.pipe.filter.ItemDistributorService;
+import de.robotricker.transportpipes.duct.pipe.items.PipeItem;
+import de.robotricker.transportpipes.duct.types.DuctType;
+import de.robotricker.transportpipes.inventory.DuctSettingsInventory;
+import de.robotricker.transportpipes.items.ItemService;
+import de.robotricker.transportpipes.location.BlockLocation;
+import de.robotricker.transportpipes.location.TPDirection;
 
-public class IronPipe extends Pipe implements ClickableDuct {
+public class IronPipe extends Pipe {
 
-	private WrappedDirection currentOutputDir;
+    private TPDirection currentOutputDirection;
 
-	public IronPipe(Location blockLoc) {
-		super(blockLoc);
-		currentOutputDir = WrappedDirection.UP;
-	}
+    public IronPipe(DuctType ductType, BlockLocation blockLoc, World world, Chunk chunk, DuctSettingsInventory settingsInv, GlobalDuctManager globalDuctManager, ItemDistributorService itemDistributor) {
+        super(ductType, blockLoc, world, chunk, settingsInv, globalDuctManager, itemDistributor);
+        currentOutputDirection = TPDirection.UP;
+    }
 
-	@Override
-	public Map<WrappedDirection, Integer> handleArrivalAtMiddle(PipeItem item, WrappedDirection before, Collection<WrappedDirection> possibleDirs) {
-		Map<WrappedDirection, Integer> map = new HashMap<WrappedDirection, Integer>();
-		map.put(currentOutputDir, item.getItem().getAmount());
-		return map;
-	}
+    @Override
+    public void notifyClick(Player p, boolean shift) {
+        super.notifyClick(p, shift);
+        cycleOutputDirection();
+        p.playSound(p.getLocation(), Sound.UI_BUTTON_CLICK, 1f, 1f);
+    }
 
-	@Override
-	public void saveToNBTTag(CompoundMap tags) {
-		super.saveToNBTTag(tags);
-		NBTUtils.saveIntValue(tags, "OutputDirection", currentOutputDir.getId());
-	}
+    public TPDirection getCurrentOutputDirection() {
+        return currentOutputDirection;
+    }
 
-	@Override
-	public void loadFromNBTTag(CompoundTag tag, long datFileVersion) {
-		super.loadFromNBTTag(tag, datFileVersion);
-		currentOutputDir = WrappedDirection.fromID(NBTUtils.readIntTag(tag.getValue().get("OutputDirection"), 0));
-	}
+    public void setCurrentOutputDirection(TPDirection currentOutputDirection) {
+        this.currentOutputDirection = currentOutputDirection;
+    }
 
-	public void cycleOutputDirection() {
-		Collection<WrappedDirection> connections = getAllConnections();
-		if (connections.isEmpty()) {
-			return;
-		}
+    @Override
+    protected Map<TPDirection, Integer> calculateItemDistribution(PipeItem pipeItem, TPDirection movingDir, List<TPDirection> dirs, TransportPipes transportPipes) {
+        Map<TPDirection, Integer> absWeights = new HashMap<>();
+        if (dirs.contains(getCurrentOutputDirection())) {
+            absWeights.put(getCurrentOutputDirection(), 1);
+        }
+        return itemDistributor.splitPipeItem(pipeItem.getItem(), absWeights, this);
+    }
 
-		WrappedDirection oldOutputDir = currentOutputDir;
+    private void cycleOutputDirection() {
+        Set<TPDirection> allConns = getAllConnections();
+        if (allConns.isEmpty()) {
+            return;
+        }
 
-		do {
-			int dirId = currentOutputDir.getId();
-			dirId++;
-			if (WrappedDirection.fromID(dirId) == null) {
-				dirId = 0;
-			}
-			currentOutputDir = WrappedDirection.fromID(dirId);
-		} while (!connections.contains(currentOutputDir));
+        TPDirection oldOutputDirection = currentOutputDirection;
+        int dirId;
+        do {
+            dirId = currentOutputDirection.ordinal();
+            dirId++;
+            dirId %= TPDirection.values().length;
+            currentOutputDirection = TPDirection.values()[dirId];
+        } while (!allConns.contains(currentOutputDirection));
 
-		if (oldOutputDir != currentOutputDir) {
-			TransportPipes.instance.pipeThread.runTask(new Runnable() {
+        if (oldOutputDirection != currentOutputDirection) {
+            globalDuctManager.updateDuctInRenderSystems(this, true);
+        }
 
-				public void run() {
-					TransportPipes.instance.ductManager.updateDuct(IronPipe.this);
-				};
-			}, 0);
-		}
-	}
+    }
 
-	@Override
-	public void click(Player p, WrappedDirection side) {
-		cycleOutputDirection();
-		p.playSound(p.getLocation(), Sound.UI_BUTTON_CLICK, 1f, 1f);
-	}
+    @Override
+    public Material getBreakParticleData() {
+        return Material.IRON_BLOCK;
+    }
 
-	public WrappedDirection getCurrentOutputDir() {
-		return currentOutputDir;
-	}
+    @Override
+    public void notifyConnectionChange() {
+        super.notifyConnectionChange();
+        Set<TPDirection> allConns = getAllConnections();
+        if (!allConns.isEmpty() && !allConns.contains(currentOutputDirection)) {
+            cycleOutputDirection();
+        }
+    }
 
-	@Override
-	public PipeType getPipeType() {
-		return PipeType.IRON;
-	}
+    @Override
+    public void saveToNBTTag(CompoundTag compoundTag, ItemService itemService) {
+        super.saveToNBTTag(compoundTag, itemService);
 
-	@Override
-	public int[] getBreakParticleData() {
-		return new int[] { 42, 0 };
-	}
+        compoundTag.putInt("outputDir", currentOutputDirection.ordinal());
 
-	@Override
-	public List<ItemStack> getDroppedItems() {
-		List<ItemStack> is = new ArrayList<>();
-		is.add(DuctItemUtils.getClonedDuctItem(new PipeDetails(getPipeType())));
-		return is;
-	}
+    }
 
-	@Override
-	public DuctDetails getDuctDetails() {
-		return new PipeDetails(getPipeType());
-	}
-	
-	@Override
-	public void notifyConnectionsChange() {
-		super.notifyConnectionsChange();
-		Collection<WrappedDirection> allConns = getAllConnections();
-		if (!allConns.isEmpty() && !allConns.contains(currentOutputDir)) {
-			cycleOutputDirection();
-		}
-	}
+    @Override
+    public void loadFromNBTTag(CompoundTag compoundTag, ItemService itemService) {
+        super.loadFromNBTTag(compoundTag, itemService);
 
+        currentOutputDirection = TPDirection.values()[compoundTag.getInt("outputDir")];
+
+    }
 }

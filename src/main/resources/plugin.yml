@@ -1,21 +1,23 @@
-name: TransportPipes
+name: ${project.name}
 version: ${project.versionCode}
 author: RoboTricker
-main: de.robotricker.transportpipes.TransportPipes
+main: ${project.groupId}.${project.artifactId}.${project.name}
 depend: [ProtocolLib]
-softdepend: [LogisticsApi, AuthMe, AcidIsland, LWC]
-commands:
-  transportpipes:
-    aliases: [transportpipe, tpipes, tpipe, pipes, pipe]
+softdepend: [LogisticsApi]
+api-version: 1.13
 permissions:
   transportpipes.*:
     children:
       transportpipes.tps: true
-      transportpipes.reload: true
       transportpipes.creative: true
-      transportpipes.save: true
-      transportpipes.delete: true
-      transportpipes.craft: true
+      transportpipes.settings: true
+      transportpipes.craft.*: true
+  transportpipes.tps:
+    default: op
+  transportpipes.creative:
+    default: op
+  transportpipes.settings:
+    default: true
   transportpipes.craft.*:
     default: true
     children:

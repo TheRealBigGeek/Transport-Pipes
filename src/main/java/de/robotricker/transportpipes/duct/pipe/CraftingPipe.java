@@ -1,383 +1,304 @@
 package de.robotricker.transportpipes.duct.pipe;
 
+import net.querz.nbt.CompoundTag;
+import net.querz.nbt.ListTag;
+import net.querz.nbt.StringTag;
+
+import org.bukkit.Chunk;
+import org.bukkit.Material;
+import org.bukkit.World;
+import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.Recipe;
+import org.bukkit.inventory.RecipeChoice;
+import org.bukkit.inventory.ShapedRecipe;
+import org.bukkit.inventory.ShapelessRecipe;
+
 import java.util.ArrayList;
-import java.util.Collection;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-
-import org.bukkit.Bukkit;
-import org.bukkit.Location;
-import org.bukkit.entity.Player;
-import org.bukkit.inventory.Inventory;
-import org.bukkit.inventory.ItemStack;
-
-import com.flowpowered.nbt.CompoundMap;
-import com.flowpowered.nbt.CompoundTag;
-import com.flowpowered.nbt.StringTag;
-import com.flowpowered.nbt.Tag;
+import java.util.Objects;
+import java.util.Set;
 
 import de.robotricker.transportpipes.TransportPipes;
-import de.robotricker.transportpipes.api.TransportPipesContainer;
-import de.robotricker.transportpipes.duct.ClickableDuct;
-import de.robotricker.transportpipes.duct.DuctInv;
-import de.robotricker.transportpipes.duct.InventoryDuct;
-import de.robotricker.transportpipes.duct.pipe.ExtractionPipe.ExtractAmount;
-import de.robotricker.transportpipes.duct.pipe.ExtractionPipe.ExtractCondition;
-import de.robotricker.transportpipes.duct.pipe.craftingpipe.CraftingPipeProcessInv;
-import de.robotricker.transportpipes.duct.pipe.craftingpipe.CraftingPipeRecipeInv;
-import de.robotricker.transportpipes.duct.pipe.utils.FilteringMode;
-import de.robotricker.transportpipes.duct.pipe.utils.PipeType;
-import de.robotricker.transportpipes.pipeitems.ItemData;
-import de.robotricker.transportpipes.pipeitems.PipeItem;
-import de.robotricker.transportpipes.utils.WrappedDirection;
-import de.robotricker.transportpipes.utils.ductdetails.DuctDetails;
-import de.robotricker.transportpipes.utils.ductdetails.PipeDetails;
-import de.robotricker.transportpipes.utils.staticutils.DuctItemUtils;
-import de.robotricker.transportpipes.utils.staticutils.InventoryUtils;
-import de.robotricker.transportpipes.utils.staticutils.NBTUtils;
-import de.robotricker.transportpipes.utils.tick.TickData;
+import de.robotricker.transportpipes.duct.manager.DuctManager;
+import de.robotricker.transportpipes.duct.manager.GlobalDuctManager;
+import de.robotricker.transportpipes.duct.manager.PipeManager;
+import de.robotricker.transportpipes.duct.pipe.filter.ItemData;
+import de.robotricker.transportpipes.duct.pipe.filter.ItemDistributorService;
+import de.robotricker.transportpipes.duct.pipe.items.PipeItem;
+import de.robotricker.transportpipes.duct.types.DuctType;
+import de.robotricker.transportpipes.inventory.DuctSettingsInventory;
+import de.robotricker.transportpipes.items.ItemService;
+import de.robotricker.transportpipes.location.BlockLocation;
+import de.robotricker.transportpipes.location.TPDirection;
 
-public class CraftingPipe extends Pipe implements ClickableDuct, InventoryDuct {
+public class CraftingPipe extends Pipe {
 
-	// ignoring amount
-	private ItemData[] recipeItems;
-	private ItemStack recipeResult;
-	private ItemStack[] processItems;
-	private ItemStack resultCache;
+    private ItemData[] recipeItems;
+    private Recipe recipe;
+    private TPDirection outputDir;
+    private List<ItemStack> cachedItems;
 
-	private CraftingPipeRecipeInv recipeInventory;
-	private CraftingPipeProcessInv processInventory;
+    public CraftingPipe(DuctType ductType, BlockLocation blockLoc, World world, Chunk chunk, DuctSettingsInventory settingsInv, GlobalDuctManager globalDuctManager, ItemDistributorService itemDistributor) {
+        super(ductType, blockLoc, world, chunk, settingsInv, globalDuctManager, itemDistributor);
+        recipeItems = new ItemData[9];
+        outputDir = null;
+        cachedItems = new ArrayList<>();
+    }
 
-	private WrappedDirection outputDirection;
-	// a list of PipeItems that were just crafted
-	// every PipeItem in this list should be ignored on "handleArrivalAtMiddle"
-	private List<PipeItem> pipeItemsJustCrafted;
+    @Override
+    public void tick(boolean bigTick, TransportPipes transportPipes, DuctManager ductManager) {
+        super.tick(bigTick, transportPipes, ductManager);
+        if (bigTick) {
+            performCrafting((PipeManager) ductManager, transportPipes);
+        }
+    }
 
-	public CraftingPipe(Location blockLoc) {
-		super(blockLoc);
-		this.recipeItems = new ItemData[9];
-		this.processItems = new ItemStack[9];
+    @Override
+    protected Map<TPDirection, Integer> calculateItemDistribution(PipeItem pipeItem, TPDirection movingDir, List<TPDirection> dirs, TransportPipes transportPipes) {
+        ItemStack overflow = addCachedItem(pipeItem.getItem(), transportPipes);
+        if (overflow != null) {
+            transportPipes.runTaskSync(() -> getWorld().dropItem(getBlockLoc().toLocation(getWorld()), overflow));
+        }
+        return null;
+    }
 
-		this.recipeInventory = new CraftingPipeRecipeInv(this);
-		this.processInventory = new CraftingPipeProcessInv(this);
+    public void performCrafting(PipeManager pipeManager, TransportPipes transportPipes) {
+        if (outputDir != null && recipe != null) {
+            ItemStack resultItem = recipe.getResult();
 
-		this.outputDirection = null;
-		this.pipeItemsJustCrafted = new ArrayList<>();
-	}
+            List<RecipeChoice> ingredients = new ArrayList<>();
+            if (recipe instanceof ShapelessRecipe) {
+                ingredients.addAll(((ShapelessRecipe) recipe).getChoiceList());
+            } else if (recipe instanceof ShapedRecipe) {
+                Map<Character, Integer> charCounts = new HashMap<>();
+                for (String row : ((ShapedRecipe) recipe).getShape()) {
+                    for (char c : row.toCharArray()) {
+                        charCounts.put(c, charCounts.getOrDefault(c, 0) + 1);
+                    }
+                }
+                for (Character c : charCounts.keySet()) {
+                    RecipeChoice ingredientChoice = ((ShapedRecipe) recipe).getChoiceMap().get(c);
+                    if (ingredientChoice != null) {
+                        ingredients.addAll(Collections.nCopies(charCounts.get(c), ingredientChoice));
+                    }
+                }
+            }
 
-	public WrappedDirection getOutputDirection() {
-		return outputDirection;
-	}
+            List<ItemStack> cachedItems = new ArrayList<>();
+            for (ItemStack cachedItem : this.cachedItems) {
+                cachedItems.add(cachedItem.clone());
+            }
 
-	public void setOutputDirection(WrappedDirection outputDirection) {
-		this.outputDirection = outputDirection;
-	}
+            //iterate needed ingredients
+            Iterator<RecipeChoice> neededIngredientsIt = ingredients.iterator();
+            while (neededIngredientsIt.hasNext()) {
+                RecipeChoice neededIngredient = neededIngredientsIt.next();
 
-	/**
-	 * checks if the current outputdirection is valid and updates it to a valid
-	 * value if necessary
-	 * 
-	 * @param cycle
-	 *            whether the direction should really cycle or just be checked for
-	 *            validity
-	 */
-	public void checkAndUpdateOutputDirection(boolean cycle) {
-		Collection<WrappedDirection> connections = getAllConnections();
-		if (connections.isEmpty()) {
-			outputDirection = null;
-		} else if (cycle || outputDirection == null || !connections.contains(outputDirection)) {
-			do {
-				if (outputDirection == null) {
-					outputDirection = WrappedDirection.NORTH;
-				} else {
-					outputDirection = outputDirection.getNextDirection();
-				}
-			} while (!connections.contains(outputDirection));
-		}
-	}
+                //iterate cached items
+                for (int i = 0; i < cachedItems.size(); i++) {
+                    if (neededIngredient.test(cachedItems.get(i))) {
+                        if (cachedItems.get(i).getAmount() > 1) {
+                            cachedItems.get(i).setAmount(cachedItems.get(i).getAmount() - 1);
+                        } else {
+                            cachedItems.remove(i);
+                        }
+                        neededIngredientsIt.remove();
+                        break;
+                    }
+                }
 
-	/**
-	 * @return overflow
-	 */
-	public ItemStack addProcessItem(ItemStack item) {
-		for (int i = 0; i < processItems.length; i++) {
-			ItemStack processItemBefore = processItems[i];
-			if (processItemBefore == null) {
-				processItems[i] = item;
-				updateProcessInv();
-				return null;
-			} else {
-				if (!processItemBefore.isSimilar(item)) {
-					continue;
-				}
-				int amountBefore = processItemBefore.getAmount();
-				int amountItem = item.getAmount();
-				int amountMax = item.getMaxStackSize();
-				int delta = Math.min(amountMax, amountBefore + amountItem) - amountBefore;
-				processItems[i].setAmount(amountBefore + delta);
-				updateProcessInv();
-				if (delta < amountItem) {
-					item.setAmount(amountItem - delta);
-				} else {
-					return null;
-				}
-			}
-		}
-		return item;
-	}
+            }
 
-	private void removeProcessItems(Map<ItemData, Integer> removedItems) {
-		for (int i = 0; i < 9; i++) {
-			ItemData slotId = processItems[i] == null ? null : new ItemData(processItems[i]);
-			int slotCount = processItems[i] == null ? 0 : processItems[i].getAmount();
-			if (removedItems.containsKey(slotId)) {
-				int removeCount = removedItems.get(slotId);
-				if (slotCount - removeCount > 0) {
-					processItems[i].setAmount(slotCount - removeCount);
-					removedItems.remove(slotId);
-				} else if (slotCount - removeCount == 0) {
-					processItems[i] = null;
-					removedItems.remove(slotId);
-				} else if (slotCount - removeCount < 0) {
-					processItems[i] = null;
-					removedItems.put(slotId, removeCount - slotCount);
-				}
-			}
-		}
-		updateProcessInv();
-	}
+            if (ingredients.isEmpty()) {
+                // update real cachedItems list
+                this.cachedItems.clear();
+                this.cachedItems.addAll(cachedItems);
 
-	private void updateProcessInv() {
-		for (int i = 0; i < processItems.length; i++) {
-			if (processItems[i] != null) {
-				processInventory.getSharedInventory().setItem(9 + i, processItems[i]);
-			} else {
-				processInventory.getSharedInventory().setItem(9 + i, null);
-			}
-		}
-	}
+                transportPipes.runTaskSync(() -> {
+                    settingsInv.save(null);
+                    settingsInv.populate();
+                });
 
-	@Override
-	public void tick(TickData tickData) {
-		super.tick(tickData);
+                // output result item
+                PipeItem pipeItem = new PipeItem(resultItem.clone(), getWorld(), getBlockLoc(), outputDir);
+                pipeItem.getRelativeLocation().set(0.5d, 0.5d, 0.5d);
+                pipeItem.resetOldRelativeLocation();
+                pipeManager.spawnPipeItem(pipeItem);
+                pipeManager.putPipeItemInPipe(pipeItem);
 
-		Map<ItemData, Integer> neededItems = new HashMap<>();
-		for (int i = 0; i < 9; i++) {
-			ItemData id = recipeItems[i];
-			if (id != null) {
-				int count = neededItems.get(id) == null ? 0 : neededItems.get(id);
-				neededItems.put(id, count + 1);
-			}
-		}
-		Map<ItemData, Integer> givenItems = new HashMap<>();
-		for (int i = 0; i < 9; i++) {
-			ItemData id = processItems[i] == null ? null : new ItemData(processItems[i]);
-			if (id != null) {
-				int count = givenItems.get(id) == null ? 0 : givenItems.get(id);
-				givenItems.put(id, count + processItems[i].getAmount());
-			}
-		}
+            }
+        }
+    }
 
-		// only craft if there is space for the result and a valid recipe is given
-		boolean craft = resultCache == null && recipeResult != null;
-		for (ItemData neededId : neededItems.keySet()) {
-			if (givenItems.containsKey(neededId)) {
-				int neededCount = neededItems.get(neededId);
-				int givenCount = givenItems.get(neededId);
-				if (givenCount < neededCount) {
-					craft = false;
-					break;
-				}
-			} else {
-				craft = false;
-				break;
-			}
-		}
-		if (craft) {
-			resultCache = recipeResult.clone();
-			removeProcessItems(neededItems);
-		}
+    public int spaceForItem(ItemData data) {
+        int space = 0;
 
-		if (resultCache != null && outputDirection != null) {
-			PipeItem pipeItem = new PipeItem(resultCache.clone(), getBlockLoc(), outputDirection);
-			// let the item spawn in the center of the pipe
-			pipeItem.relLoc().set(0.5f, 0.5f, 0.5f);
-			tempPipeItemsWithSpawn.put(pipeItem, outputDirection);
-			pipeItemsJustCrafted.add(pipeItem);
-			resultCache = null;
-		}
-	}
+        for (int i = 0; i < 9; i++) {
+            if (i >= cachedItems.size()) {
+                space += data.toItemStack().getMaxStackSize();
+            } else {
+                ItemStack item = cachedItems.get(i);
+                if (item.isSimilar(data.toItemStack()) && item.getAmount() < item.getMaxStackSize()) {
+                    space += item.getMaxStackSize() - item.getAmount();
+                }
+            }
+        }
 
-	public ItemData[] getRecipeItems() {
-		return recipeItems;
-	}
+        return space;
+    }
 
-	public ItemStack getRecipeResult() {
-		return recipeResult;
-	}
+    public ItemData[] getRecipeItems() {
+        return recipeItems;
+    }
 
-	public void setRecipeResult(ItemStack result) {
-		this.recipeResult = result;
-	}
+    public TPDirection getOutputDir() {
+        return outputDir;
+    }
 
-	public int freeSpaceForItem(ItemData itemData) {
-		boolean itemNeededForRecipe = false;
-		for (int i = 0; i < recipeItems.length; i++) {
-			ItemData recipeItemData = recipeItems[i];
-			if (recipeItemData != null && recipeItemData.equals(itemData)) {
-				itemNeededForRecipe = true;
-				break;
-			}
-		}
-		
-		int freeSpace = 0;
-		if (itemNeededForRecipe) {
-			for (int i = 0; i < processItems.length; i++) {
-				ItemStack processItem = processItems[i];
-				ItemStack itemStack = itemData.toItemStack();
-				if (processItem == null) {
-					freeSpace += itemStack.getMaxStackSize();
-				} else if (processItem.isSimilar(itemStack)) {
-					freeSpace += processItem.getMaxStackSize() - processItem.getAmount();
-				}
-			}
-		}
-		return freeSpace;
-	}
+    public void setOutputDir(TPDirection outputDir) {
+        this.outputDir = outputDir;
+    }
 
-	@Override
-	public Map<WrappedDirection, Integer> handleArrivalAtMiddle(final PipeItem item, WrappedDirection before, Collection<WrappedDirection> possibleDirs) {
-		// let just crafted item out
-		if (recipeResult != null && item.getItem().isSimilar(recipeResult)) {
-			Map<WrappedDirection, Integer> outputMap = new HashMap<>();
-			outputMap.put(outputDirection, item.getItem().getAmount());
-			return outputMap;
-		}
-		final ItemStack overflow = addProcessItem(item.getItem());
-		if (overflow != null) {
-			TransportPipes.runTask(new Runnable() {
+    public Recipe getRecipe() {
+        return recipe;
+    }
 
-				@Override
-				public void run() {
-					item.getBlockLoc().getWorld().dropItem(item.getBlockLoc().clone().add(0.5, 0.5, 0.5), overflow);
-				}
-			});
-		}
-		return null;
-	}
+    public void setRecipe(Recipe recipe) {
+        this.recipe = recipe;
+    }
 
-	@Override
-	public int[] getBreakParticleData() {
-		return new int[] { 58, 0 };
-	}
+    public List<ItemStack> getCachedItems() {
+        return cachedItems;
+    }
 
-	@Override
-	public void click(Player p, WrappedDirection side) {
-		getDuctInventory(p).openOrUpdateInventory(p);
-	}
+    public ItemStack addCachedItem(ItemStack item, TransportPipes transportPipes) {
+        for (ItemStack cachedItem : cachedItems) {
+            if (cachedItem.isSimilar(item)) {
+                int cachedItemAmount = cachedItem.getAmount();
+                cachedItem.setAmount(Math.min(cachedItem.getMaxStackSize(), cachedItemAmount + item.getAmount()));
+                int overflow = cachedItemAmount + item.getAmount() - cachedItem.getMaxStackSize();
+                if (overflow > 0) {
+                    item.setAmount(overflow);
+                } else {
+                    item = null;
+                    break;
+                }
+            }
+        }
+        if (cachedItems.size() < 9 && item != null) {
+            cachedItems.add(item);
+            item = null;
+        }
 
-	@Override
-	public DuctInv getDuctInventory(Player p) {
-		if (p.isSneaking()) {
-			return recipeInventory;
-		} else {
-			return processInventory;
-		}
-	}
+        transportPipes.runTaskSync(() -> {
+            settingsInv.save(null);
+            settingsInv.populate();
+        });
+        return item;
+    }
 
-	@Override
-	public PipeType getPipeType() {
-		return PipeType.CRAFTING;
-	}
+    public void updateOutputDirection(boolean cycle) {
+        TPDirection oldOutputDirection = getOutputDir();
+        Set<TPDirection> connections = getAllConnections();
+        if (connections.isEmpty()) {
+            outputDir = null;
+        } else if (cycle || outputDir == null || !connections.contains(outputDir)) {
+            do {
+                if (outputDir == null) {
+                    outputDir = TPDirection.NORTH;
+                } else {
+                    outputDir = outputDir.next();
+                }
+            } while (!connections.contains(outputDir));
+        }
+        if (oldOutputDirection != outputDir) {
+            settingsInv.populate();
+        }
+    }
 
-	@Override
-	public List<ItemStack> getDroppedItems() {
-		List<ItemStack> is = new ArrayList<>();
-		is.add(DuctItemUtils.getClonedDuctItem(new PipeDetails(getPipeType())));
-		for (int i = 0; i < 9; i++) {
-			ItemData recipeItem = recipeItems[i];
-			if (recipeItem != null) {
-				is.add(recipeItem.toItemStack());
-			}
-		}
-		for (int i = 0; i < 9; i++) {
-			ItemStack processItem = processItems[i];
-			if (processItem != null) {
-				is.add(processItem.clone());
-			}
-		}
-		return is;
-	}
+    @Override
+    public void notifyConnectionChange() {
+        super.notifyConnectionChange();
+        updateOutputDirection(false);
+    }
 
-	@Override
-	public DuctDetails getDuctDetails() {
-		return new PipeDetails(getPipeType());
-	}
+    @Override
+    public Material getBreakParticleData() {
+        return Material.CRAFTING_TABLE;
+    }
 
-	@Override
-	public void notifyConnectionsChange() {
-		super.notifyConnectionsChange();
-		checkAndUpdateOutputDirection(false);
-	}
+    @Override
+    public void saveToNBTTag(CompoundTag compoundTag, ItemService itemService) {
+        super.saveToNBTTag(compoundTag, itemService);
 
-	@Override
-	public void saveToNBTTag(CompoundMap tags) {
-		super.saveToNBTTag(tags);
-		NBTUtils.saveIntValue(tags, "OutputDirection", outputDirection == null ? -1 : outputDirection.getId());
+        compoundTag.putInt("outputDir", outputDir != null ? outputDir.ordinal() : -1);
 
-		List<Tag<?>> processItemsList = new ArrayList<>();
-		for (int i = 0; i < processItems.length; i++) {
-			ItemStack is = processItems[i];
-			processItemsList.add(InventoryUtils.toNBTTag(is));
-		}
-		NBTUtils.saveListValue(tags, "ProcessItems", CompoundTag.class, processItemsList);
+        ListTag<StringTag> recipeItemsListTag = new ListTag<>(StringTag.class);
+        for (int i = 0; i < 9; i++) {
+            ItemData itemData = recipeItems[i];
+            if (itemData == null) {
+                recipeItemsListTag.add(new StringTag(null));
+            } else {
+                recipeItemsListTag.addString(itemService.serializeItemStack(itemData.toItemStack()));
+            }
+        }
+        compoundTag.put("recipeItems", recipeItemsListTag);
 
-		List<Tag<?>> recipeItemsList = new ArrayList<>();
-		for (int i = 0; i < recipeItems.length; i++) {
-			ItemData id = recipeItems[i];
-			if (id != null) {
-				recipeItemsList.add(id.toNBTTag());
-			} else {
-				recipeItemsList.add(InventoryUtils.createNullItemNBTTag());
-			}
-		}
-		NBTUtils.saveListValue(tags, "RecipeItems", CompoundTag.class, recipeItemsList);
-		NBTUtils.saveStringValue(tags, "RecipeItemResult", InventoryUtils.ItemStackToString(recipeResult));
+        ListTag<StringTag> cachedItemsListTag = new ListTag<>(StringTag.class);
+        for (int i = 0; i < cachedItems.size(); i++) {
+            ItemStack itemStack = cachedItems.get(i);
+            cachedItemsListTag.addString(itemService.serializeItemStack(itemStack));
+        }
+        compoundTag.put("cachedItems", cachedItemsListTag);
 
-	}
+    }
 
-	@Override
-	public void loadFromNBTTag(CompoundTag tag, long datFileVersion) {
-		super.loadFromNBTTag(tag, datFileVersion);
+    @Override
+    public void loadFromNBTTag(CompoundTag compoundTag, ItemService itemService) {
+        super.loadFromNBTTag(compoundTag, itemService);
 
-		int outputDirectionId = NBTUtils.readIntTag(tag.getValue().get("OutputDirection"), -1);
-		if (outputDirectionId == -1) {
-			setOutputDirection(null);
-		} else {
-			setOutputDirection(WrappedDirection.fromID(outputDirectionId));
-		}
+        outputDir = compoundTag.getInt("outputDir") != -1 ? TPDirection.values()[compoundTag.getInt("outputDir")] : null;
 
-		List<Tag<?>> processItemsList = NBTUtils.readListTag(tag.getValue().get("ProcessItems"));
-		int i = 0;
-		for (Tag<?> itemTag : processItemsList) {
-			if (processItemsList.size() > i) {
-				processItems[i] = InventoryUtils.fromNBTTag((CompoundTag) itemTag);
-			}
-			i++;
-		}
+        ListTag<StringTag> recipeItemsListTag = (ListTag<StringTag>) compoundTag.getListTag("recipeItems");
+        for (int i = 0; i < 9; i++) {
+            if (i >= recipeItemsListTag.size()) {
+                recipeItems[i] = null;
+                continue;
+            }
+            ItemStack deserialized = itemService.deserializeItemStack(recipeItemsListTag.get(i).getValue());
+            recipeItems[i] = deserialized != null ? new ItemData(deserialized) : null;
+        }
 
-		List<Tag<?>> recipeItemsList = NBTUtils.readListTag(tag.getValue().get("RecipeItems"));
-		i = 0;
-		for (Tag<?> itemTag : recipeItemsList) {
-			if (recipeItemsList.size() > i) {
-				recipeItems[i] = ItemData.fromNBTTag((CompoundTag) itemTag);
-			}
-			i++;
-		}
-		recipeResult = InventoryUtils.StringToItemStack(NBTUtils.readStringTag(tag.getValue().get("RecipeItemResult"), null));
+        cachedItems.clear();
+        ListTag<StringTag> cachedItemsListTag = (ListTag<StringTag>) compoundTag.getListTag("cachedItems");
+        for (int i = 0; i < cachedItemsListTag.size(); i++) {
+            ItemStack deserialized = itemService.deserializeItemStack(cachedItemsListTag.get(i).getValue());
+            if (deserialized != null)
+                cachedItems.add(deserialized);
+        }
 
-		updateProcessInv();
-	}
+        settingsInv.populate();
+        settingsInv.save(null);
+    }
 
+    @Override
+    public List<ItemStack> destroyed(TransportPipes transportPipes, DuctManager ductManager, Player destroyer) {
+        List<ItemStack> items = super.destroyed(transportPipes, ductManager, destroyer);
+        for (int i = 0; i < 9; i++) {
+            ItemData id = recipeItems[i];
+            if (id != null) {
+                items.add(id.toItemStack().clone());
+            }
+        }
+        for (ItemStack cachedItem : cachedItems) {
+            items.add(cachedItem.clone());
+        }
+        return items;
+    }
 }

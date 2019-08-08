@@ -1,146 +1,163 @@
 package de.robotricker.transportpipes.duct;
 
+import net.querz.nbt.CompoundTag;
+
+import org.bukkit.Bukkit;
+import org.bukkit.Chunk;
+import org.bukkit.GameMode;
+import org.bukkit.Material;
+import org.bukkit.Particle;
+import org.bukkit.World;
+import org.bukkit.block.data.BlockData;
+import org.bukkit.entity.Panda;
+import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
+
 import java.util.ArrayList;
-import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.bukkit.Bukkit;
-import org.bukkit.Chunk;
-import org.bukkit.Effect;
-import org.bukkit.Location;
-import org.bukkit.Sound;
-import org.bukkit.inventory.ItemStack;
-
-import com.flowpowered.nbt.CompoundMap;
-import com.flowpowered.nbt.CompoundTag;
-import com.flowpowered.nbt.IntTag;
-import com.flowpowered.nbt.Tag;
-
 import de.robotricker.transportpipes.TransportPipes;
-import de.robotricker.transportpipes.api.DuctConnectionsChangeEvent;
-import de.robotricker.transportpipes.api.TransportPipesContainer;
-import de.robotricker.transportpipes.duct.pipe.Pipe;
-import de.robotricker.transportpipes.pipeitems.PipeItem;
-import de.robotricker.transportpipes.pipeitems.RelLoc;
-import de.robotricker.transportpipes.rendersystem.RenderSystem;
-import de.robotricker.transportpipes.utils.BlockLoc;
-import de.robotricker.transportpipes.utils.WrappedDirection;
-import de.robotricker.transportpipes.utils.ductdetails.DuctDetails;
-import de.robotricker.transportpipes.utils.staticutils.DuctUtils;
-import de.robotricker.transportpipes.utils.staticutils.InventoryUtils;
-import de.robotricker.transportpipes.utils.staticutils.LocationUtils;
-import de.robotricker.transportpipes.utils.staticutils.NBTUtils;
-import de.robotricker.transportpipes.utils.staticutils.UpdateUtils;
-import de.robotricker.transportpipes.utils.tick.TickData;
+import de.robotricker.transportpipes.config.GeneralConf;
+import de.robotricker.transportpipes.duct.manager.DuctManager;
+import de.robotricker.transportpipes.duct.manager.GlobalDuctManager;
+import de.robotricker.transportpipes.duct.types.DuctType;
+import de.robotricker.transportpipes.inventory.DuctSettingsInventory;
+import de.robotricker.transportpipes.items.ItemService;
+import de.robotricker.transportpipes.location.BlockLocation;
+import de.robotricker.transportpipes.location.TPDirection;
 
 public abstract class Duct {
 
-	// the blockLoc of this duct
-	protected Location blockLoc;
-	protected Chunk cachedChunk;
+    protected GlobalDuctManager globalDuctManager;
+    protected DuctSettingsInventory settingsInv;
+    private DuctType ductType;
+    private BlockLocation blockLoc;
+    private World world;
+    private Chunk chunk;
+    private Map<TPDirection, Duct> connectedDucts;
+    private BlockData obfuscatedWith;
 
-	public Duct(Location blockLoc) {
-		this.blockLoc = blockLoc;
-		this.cachedChunk = blockLoc.getBlock().getChunk();
-	}
+    public Duct(DuctType ductType, BlockLocation blockLoc, World world, Chunk chunk, DuctSettingsInventory settingsInv, GlobalDuctManager globalDuctManager) {
+        this.ductType = ductType;
+        this.blockLoc = blockLoc;
+        this.world = world;
+        this.chunk = chunk;
+        this.connectedDucts = Collections.synchronizedMap(new HashMap<>());
+        this.settingsInv = settingsInv;
+        this.globalDuctManager = globalDuctManager;
+    }
 
-	public Location getBlockLoc() {
-		return blockLoc;
-	}
+    public void initSettingsInv(TransportPipes transportPipes) {
+        if (settingsInv != null) {
+            Bukkit.getPluginManager().registerEvents(settingsInv, transportPipes);
+            settingsInv.setDuct(this);
+            settingsInv.create();
+        }
+    }
 
-	public boolean isInLoadedChunk() {
-		return cachedChunk.isLoaded();
-	}
+    public DuctSettingsInventory getSettingsInv() {
+        return settingsInv;
+    }
 
-	public abstract void tick(TickData tickData);
-	
-	/**
-	 * get the items that will be dropped on pipe destroy
-	 */
-	public abstract List<ItemStack> getDroppedItems();
+    public void notifyClick(Player p, boolean shift) {
+        if (settingsInv != null)
+            settingsInv.openInv(p);
+    }
 
-	public abstract int[] getBreakParticleData();
+    public DuctType getDuctType() {
+        return ductType;
+    }
 
-	public void notifyConnectionsChange() {
-		DuctConnectionsChangeEvent event = new DuctConnectionsChangeEvent(this);
-		Bukkit.getPluginManager().callEvent(event);
-	}
+    public BlockLocation getBlockLoc() {
+        return blockLoc;
+    }
 
-	public Collection<WrappedDirection> getAllConnections() {
-		Set<WrappedDirection> connections = new HashSet<>();
-		connections.addAll(getOnlyConnectableDuctConnections());
-		connections.addAll(getOnlyBlockConnections());
-		return connections;
-	}
+    public World getWorld() {
+        return world;
+    }
 
-	public abstract boolean canConnectToDuct(Duct duct);
+    public boolean isInLoadedChunk() {
+        return chunk.isLoaded();
+    }
 
-	/**
-	 * gets all duct connection directions to which this duct can connect to (not
-	 * block connections)
-	 **/
-	public List<WrappedDirection> getOnlyConnectableDuctConnections() {
-		List<WrappedDirection> dirs = new ArrayList<>();
+    public void notifyConnectionChange() {
+        if (settingsInv != null) {
+            settingsInv.populate();
+        }
+    }
 
-		Map<BlockLoc, Duct> ductMap = TransportPipes.instance.getDuctMap(getBlockLoc().getWorld());
+    public BlockData obfuscatedWith() {
+        return obfuscatedWith;
+    }
 
-		if (ductMap != null) {
-			for (WrappedDirection dir : WrappedDirection.values()) {
-				Location blockLoc = getBlockLoc().clone().add(dir.getX(), dir.getY(), dir.getZ());
-				BlockLoc bl = BlockLoc.convertBlockLoc(blockLoc);
-				if (ductMap.containsKey(bl)) {
-					Duct neighborDuct = ductMap.get(bl);
-					if (canConnectToDuct(neighborDuct)) {
-						dirs.add(dir);
-					}
-				}
-			}
-		}
+    public void obfuscatedWith(BlockData obfuscatedWith) {
+        this.obfuscatedWith = obfuscatedWith;
+    }
 
-		return dirs;
-	}
+    public void tick(boolean bigTick, TransportPipes transportPipes, DuctManager ductManager) {
 
-	/**
-	 * gets all block connection directions (not duct connections)
-	 **/
-	public abstract List<WrappedDirection> getOnlyBlockConnections();
+    }
 
-	public abstract DuctType getDuctType();
+    public void postTick(boolean bigTick, TransportPipes transportPipes, DuctManager ductManager, GeneralConf generalConf) {
 
-	public abstract DuctDetails getDuctDetails();
-	
-	public void explode(final boolean withSound, final boolean dropItems) {
-		TransportPipes.instance.pipeThread.runTask(new Runnable() {
+    }
 
-			@Override
-			public void run() {
-				DuctUtils.destroyDuct(null, Duct.this, dropItems);
-				if (withSound) {
-					blockLoc.getWorld().playSound(blockLoc, Sound.ENTITY_GENERIC_EXPLODE, 1f, 1f);
-				}
-				blockLoc.getWorld().playEffect(blockLoc.clone().add(0.5d, 0.5d, 0.5d), Effect.SMOKE, 31);
-			}
-		}, 0);
-	}
+    public void syncBigTick(DuctManager ductManager) {
 
-	public void saveToNBTTag(CompoundMap tags) {
-		NBTUtils.saveStringValue(tags, "DuctLocation", LocationUtils.LocToString(blockLoc));
-		NBTUtils.saveStringValue(tags, "DuctDetails", getDuctDetails().toString());
+    }
 
-		List<Tag<?>> neighborDuctsList = new ArrayList<>();
-		List<WrappedDirection> neighborDucts = getOnlyConnectableDuctConnections();
-		for (WrappedDirection pd : neighborDucts) {
-			neighborDuctsList.add(new IntTag("Direction", pd.getId()));
-		}
-		NBTUtils.saveListValue(tags, "NeighborDucts", IntTag.class, neighborDuctsList);
-	}
+    public Map<TPDirection, Duct> getDuctConnections() {
+        return connectedDucts;
+    }
 
-	public void loadFromNBTTag(CompoundTag tag, long datVersion) {
-		
-	}
+    public Set<TPDirection> getAllConnections() {
+        return new HashSet<>(getDuctConnections().keySet());
+    }
+
+    public Material getBreakParticleData() {
+        return null;
+    }
+
+    /**
+     * just for the purpose of dropping inside items or other baseDuctType specific stuff
+     */
+    public List<ItemStack> destroyed(TransportPipes transportPipes, DuctManager ductManager, Player destroyer) {
+        List<ItemStack> dropItems = new ArrayList<>();
+        if (destroyer == null || destroyer.getGameMode() != GameMode.CREATIVE) {
+            dropItems.add(getDuctType().getBaseDuctType().getItemManager().getClonedItem(getDuctType()));
+        }
+
+        if (settingsInv != null) {
+            settingsInv.closeForAllPlayers(transportPipes);
+        }
+
+        //break particles
+        if (destroyer != null && getBreakParticleData() != null) {
+            transportPipes.runTaskSync(() -> destroyer.getWorld().spawnParticle(Particle.ITEM_CRACK, getBlockLoc().getX() + 0.5f, getBlockLoc().getY() + 0.5f, getBlockLoc().getZ() + 0.5f, 30, 0.25f, 0.25f, 0.25f, 0.05f, new ItemStack(getBreakParticleData())));
+        }
+
+        return dropItems;
+    }
+
+    public void saveToNBTTag(CompoundTag compoundTag, ItemService itemService) {
+        if (obfuscatedWith != null) {
+            compoundTag.putString("obfuscatedWith", obfuscatedWith.getAsString());
+        }
+    }
+
+    public void loadFromNBTTag(CompoundTag compoundTag, ItemService itemService) {
+        if (compoundTag.containsKey("obfuscatedWith")) {
+            obfuscatedWith = Bukkit.createBlockData(compoundTag.getString("obfuscatedWith"));
+            // replace barrier block with real obfuscation block
+            if (getBlockLoc().toBlock(getWorld()).getType() == Material.BARRIER) {
+                getBlockLoc().toBlock(getWorld()).setBlockData(obfuscatedWith);
+            }
+        }
+    }
 
 }

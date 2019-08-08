@@ -1,0 +1,19 @@
+# This is the general config file of transportpipes. You can read about the options and their values at the github wiki of the plugin
+# https://github.com/RoboTricker/Transport-Pipes/wiki
+max_items_per_pipe: 20
+crafting_enabled: true
+anticheat_plugins:
+- NoCheatPlus
+- AAC
+- CompatNoCheatPlus
+- AntiCheatPlus
+default_render_system: modelled
+default_show_items: true
+default_render_distance: 25
+resourcepack_mode: default
+disabled_worlds: []
+wrench:
+  item: STICK
+  glowing: true
+language: en
+show_hidden_ducts_time: 5

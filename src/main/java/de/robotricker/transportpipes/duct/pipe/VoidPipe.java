@@ -1,51 +1,35 @@
 package de.robotricker.transportpipes.duct.pipe;
 
-import java.util.ArrayList;
-import java.util.Collection;
+import org.bukkit.Chunk;
+import org.bukkit.Material;
+import org.bukkit.World;
+
 import java.util.List;
 import java.util.Map;
 
-import org.bukkit.Location;
-import org.bukkit.inventory.ItemStack;
-
-import de.robotricker.transportpipes.duct.pipe.utils.PipeType;
-import de.robotricker.transportpipes.pipeitems.PipeItem;
-import de.robotricker.transportpipes.utils.WrappedDirection;
-import de.robotricker.transportpipes.utils.ductdetails.DuctDetails;
-import de.robotricker.transportpipes.utils.ductdetails.PipeDetails;
-import de.robotricker.transportpipes.utils.staticutils.DuctItemUtils;
+import de.robotricker.transportpipes.TransportPipes;
+import de.robotricker.transportpipes.duct.manager.GlobalDuctManager;
+import de.robotricker.transportpipes.duct.pipe.filter.ItemDistributorService;
+import de.robotricker.transportpipes.duct.pipe.items.PipeItem;
+import de.robotricker.transportpipes.duct.types.DuctType;
+import de.robotricker.transportpipes.inventory.DuctSettingsInventory;
+import de.robotricker.transportpipes.location.BlockLocation;
+import de.robotricker.transportpipes.location.TPDirection;
 
 public class VoidPipe extends Pipe {
 
-	public VoidPipe(Location blockLoc) {
-		super(blockLoc);
-	}
+    public VoidPipe(DuctType ductType, BlockLocation blockLoc, World world, Chunk chunk, DuctSettingsInventory settingsInv, GlobalDuctManager globalDuctManager, ItemDistributorService itemDistributor) {
+        super(ductType, blockLoc, world, chunk, settingsInv, globalDuctManager, itemDistributor);
+    }
 
-	@Override
-	public Map<WrappedDirection, Integer> handleArrivalAtMiddle(PipeItem item, WrappedDirection before, Collection<WrappedDirection> possibleDirs) {
-		return null;
-	}
+    @Override
+    protected Map<TPDirection, Integer> calculateItemDistribution(PipeItem pipeItem, TPDirection movingDir, List<TPDirection> dirs, TransportPipes transportPipes) {
+        return null;
+    }
 
-	@Override
-	public PipeType getPipeType() {
-		return PipeType.VOID;
-	}
-	
-	@Override
-	public int[] getBreakParticleData() {
-		return new int[] { 49, 0 };
-	}
-
-	@Override
-	public List<ItemStack> getDroppedItems() {
-		List<ItemStack> is = new ArrayList<>();
-		is.add(DuctItemUtils.getClonedDuctItem(new PipeDetails(getPipeType())));
-		return is;
-	}
-
-	@Override
-	public DuctDetails getDuctDetails() {
-		return new PipeDetails(getPipeType());
-	}
+    @Override
+    public Material getBreakParticleData() {
+        return Material.OBSIDIAN;
+    }
 
 }
